@@ -125,9 +125,31 @@ export default function AdminDashboardPage() {
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, targetField: 'thumbnail' | 'modelUrl') => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, targetField: 'thumbnail' | 'modelUrl' | 'videoUrl') => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // For video files or large files, read directly as Data URL on client to bypass serverless upload limits
+    if (targetField === 'videoUrl' || file.type.startsWith('video/')) {
+      if (file.size > 25 * 1024 * 1024) {
+        alert('Notice: This video is larger than 25MB. For best performance, we recommend pasting a YouTube/Vimeo link, but will load it now.');
+      }
+      setUploading(true);
+      const reader = new FileReader();
+      reader.onload = () => {
+        setEditingProject((prev) => ({
+          ...prev,
+          videoUrl: reader.result as string,
+        }));
+        setUploading(false);
+      };
+      reader.onerror = () => {
+        alert('Failed to read video file');
+        setUploading(false);
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
 
     setUploading(true);
     const formData = new FormData();
@@ -549,19 +571,76 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* Category-Specific Inputs */}
+              {/* Category-Specific Inputs: Video & Motion Graphics */}
               {(editingProject.category === 'video' || editingProject.category === 'motion') && (
-                <div className="space-y-2 p-4 rounded-xl bg-slate-950/60 border border-blue-500/20">
-                  <label className="block text-xs font-mono text-blue-400 font-semibold uppercase">
-                    Video URL (YouTube Embed / Vimeo / MP4)
-                  </label>
-                  <input
-                    type="text"
-                    value={editingProject.videoUrl || ''}
-                    onChange={(e) => setEditingProject({ ...editingProject, videoUrl: e.target.value })}
-                    placeholder="https://www.youtube.com/embed/..."
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-white/10 text-white text-xs"
-                  />
+                <div className="space-y-3 p-4 rounded-xl bg-slate-950/60 border border-blue-500/30">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-mono text-blue-400 font-semibold uppercase flex items-center gap-1.5">
+                      <Film className="w-4 h-4" />
+                      <span>Video Content (Motion Graphics & Video Edits)</span>
+                    </label>
+                    <span className="text-[10px] font-mono text-slate-400">MP4, MOV, WebM or YouTube</span>
+                  </div>
+
+                  {/* Direct Video File Upload Button */}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="cursor-pointer px-3.5 py-2 rounded-xl text-xs font-mono font-bold bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/40 flex items-center gap-2 transition">
+                      <Upload className="w-4 h-4 text-blue-400" />
+                      <span>Upload Video File (MP4 / MOV)</span>
+                      <input
+                        type="file"
+                        accept="video/mp4,video/webm,video/quicktime,video/*"
+                        className="hidden"
+                        onChange={(e) => handleFileUpload(e, 'videoUrl')}
+                      />
+                    </label>
+
+                    <span className="text-xs text-slate-500 font-mono">OR paste link below</span>
+                  </div>
+
+                  {/* Video URL or Embed Link */}
+                  <div>
+                    <input
+                      type="text"
+                      value={editingProject.videoUrl || ''}
+                      onChange={(e) => setEditingProject({ ...editingProject, videoUrl: e.target.value })}
+                      placeholder="Paste YouTube, Vimeo or MP4 URL (e.g. https://www.youtube.com/watch?v=...)"
+                      className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-white/10 text-white text-xs font-mono"
+                    />
+                  </div>
+
+                  {/* Live Video Preview in Modal */}
+                  {editingProject.videoUrl && (
+                    <div className="mt-3 rounded-xl overflow-hidden border border-white/10 bg-black aspect-video max-h-48 relative">
+                      {editingProject.videoUrl.includes('youtube.com') || editingProject.videoUrl.includes('youtu.be') ? (
+                        <iframe
+                          src={
+                            editingProject.videoUrl.includes('embed')
+                              ? editingProject.videoUrl
+                              : `https://www.youtube.com/embed/${editingProject.videoUrl.split('v=')[1]?.split('&')[0] || ''}`
+                          }
+                          className="w-full h-full border-0"
+                          allowFullScreen
+                        />
+                      ) : editingProject.videoUrl.includes('vimeo.com') ? (
+                        <iframe
+                          src={editingProject.videoUrl}
+                          className="w-full h-full border-0"
+                          allowFullScreen
+                        />
+                      ) : (
+                        <video
+                          src={editingProject.videoUrl}
+                          controls
+                          className="w-full h-full object-contain"
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    💡 <strong>Tip:</strong> You can choose video files directly from your computer, or paste a YouTube / Vimeo link for full-length broadcast reels and commercial promos.
+                  </p>
                 </div>
               )}
 
