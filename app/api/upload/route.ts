@@ -17,13 +17,28 @@ export async function POST(request: Request) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const uploadDir = path.join(process.cwd(), 'public', 'uploads');
+    const isVercel = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
 
+    // On Vercel / serverless: convert directly to Base64 Data URL so it never touches read-only filesystem
+    if (isVercel || file.size < 5 * 1024 * 1024) {
+      const mimeType = file.type || 'application/octet-stream';
+      const base64 = buffer.toString('base64');
+      const dataUri = `data:${mimeType};base64,${base64}`;
+
+      return NextResponse.json({
+        success: true,
+        url: dataUri,
+        filename: file.name,
+        size: file.size,
+      });
+    }
+
+    // Local development fallback: write to public/uploads
+    const uploadDir = path.join(process.cwd(), 'public', 'uploads');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
 
-    // Clean filename
     const ext = path.extname(file.name) || '';
     const safeBase = path.basename(file.name, ext).replace(/[^a-zA-Z0-9-_]/g, '_');
     const filename = `${Date.now()}-${safeBase}${ext}`;

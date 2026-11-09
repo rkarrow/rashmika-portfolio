@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { initialProjects, ProjectItem } from './initialData';
 
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -13,6 +14,10 @@ interface MongooseCache {
 declare global {
   // eslint-disable-next-line no-var
   var mongooseCache: MongooseCache | undefined;
+  // eslint-disable-next-line no-var
+  var inMemoryProjects: ProjectItem[] | undefined;
+  // eslint-disable-next-line no-var
+  var inMemoryMessages: any[] | undefined;
 }
 
 let cached: MongooseCache = global.mongooseCache || { conn: null, promise: null };
@@ -22,7 +27,8 @@ if (!global.mongooseCache) {
 }
 
 export async function connectToDatabase(): Promise<typeof mongoose | null> {
-  if (!MONGODB_URI || MONGODB_URI.trim() === '') {
+  const uri = process.env.MONGODB_URI;
+  if (!uri || uri.trim() === '') {
     return null;
   }
 
@@ -36,10 +42,10 @@ export async function connectToDatabase(): Promise<typeof mongoose | null> {
       serverSelectionTimeoutMS: 5000,
     };
 
-    cached.promise = mongoose.connect(MONGODB_URI, opts).then((mongooseInstance) => {
+    cached.promise = mongoose.connect(uri, opts).then((mongooseInstance) => {
       return mongooseInstance;
     }).catch((err) => {
-      console.warn('MongoDB connection failed, falling back to local file storage:', err.message);
+      console.warn('MongoDB connection failed on Vercel:', err.message);
       return null as unknown as typeof mongoose;
     });
   }
@@ -54,34 +60,49 @@ export async function connectToDatabase(): Promise<typeof mongoose | null> {
   return cached.conn;
 }
 
-// Local File-based persistence fallback
-const DATA_DIR = path.join(process.cwd(), 'data');
-const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json');
-const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
-
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
+// Serverless-safe writable storage (using /tmp on Vercel / Lambda)
+function getStoragePaths() {
+  const isVercel = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+  const baseDir = isVercel ? os.tmpdir() : path.join(process.cwd(), 'data');
+  return {
+    baseDir,
+    projectsFile: path.join(baseDir, 'projects.json'),
+    messagesFile: path.join(baseDir, 'messages.json'),
+  };
 }
 
 export function getLocalProjects(): ProjectItem[] {
-  ensureDataDir();
-  if (!fs.existsSync(PROJECTS_FILE)) {
-    fs.writeFileSync(PROJECTS_FILE, JSON.stringify(initialProjects, null, 2), 'utf-8');
-    return initialProjects;
+  if (global.inMemoryProjects && global.inMemoryProjects.length > 0) {
+    return global.inMemoryProjects;
   }
+
+  const { projectsFile } = getStoragePaths();
   try {
-    const content = fs.readFileSync(PROJECTS_FILE, 'utf-8');
-    return JSON.parse(content);
-  } catch (error) {
-    return initialProjects;
+    if (fs.existsSync(projectsFile)) {
+      const content = fs.readFileSync(projectsFile, 'utf-8');
+      const parsed = JSON.parse(content);
+      global.inMemoryProjects = parsed;
+      return parsed;
+    }
+  } catch (e) {
+    // ignore
   }
+
+  global.inMemoryProjects = [...initialProjects];
+  return global.inMemoryProjects;
 }
 
 export function saveLocalProjects(projects: ProjectItem[]): void {
-  ensureDataDir();
-  fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2), 'utf-8');
+  global.inMemoryProjects = projects;
+  const { baseDir, projectsFile } = getStoragePaths();
+  try {
+    if (!fs.existsSync(baseDir)) {
+      fs.mkdirSync(baseDir, { recursive: true });
+    }
+    fs.writeFileSync(projectsFile, JSON.stringify(projects, null, 2), 'utf-8');
+  } catch (err: any) {
+    console.warn('Could not write to disk, using in-memory store:', err.message);
+  }
 }
 
 export interface ContactMessage {
@@ -95,21 +116,27 @@ export interface ContactMessage {
 }
 
 export function getLocalMessages(): ContactMessage[] {
-  ensureDataDir();
-  if (!fs.existsSync(MESSAGES_FILE)) {
-    fs.writeFileSync(MESSAGES_FILE, JSON.stringify([], null, 2), 'utf-8');
-    return [];
+  if (global.inMemoryMessages) {
+    return global.inMemoryMessages;
   }
+
+  const { messagesFile } = getStoragePaths();
   try {
-    const content = fs.readFileSync(MESSAGES_FILE, 'utf-8');
-    return JSON.parse(content);
-  } catch (error) {
-    return [];
+    if (fs.existsSync(messagesFile)) {
+      const content = fs.readFileSync(messagesFile, 'utf-8');
+      const parsed = JSON.parse(content);
+      global.inMemoryMessages = parsed;
+      return parsed;
+    }
+  } catch (e) {
+    // ignore
   }
+
+  global.inMemoryMessages = [];
+  return global.inMemoryMessages;
 }
 
 export function saveLocalMessage(msg: Omit<ContactMessage, 'id' | 'createdAt' | 'read'>): ContactMessage {
-  ensureDataDir();
   const list = getLocalMessages();
   const newMsg: ContactMessage = {
     ...msg,
@@ -118,6 +145,17 @@ export function saveLocalMessage(msg: Omit<ContactMessage, 'id' | 'createdAt' | 
     read: false,
   };
   list.unshift(newMsg);
-  fs.writeFileSync(MESSAGES_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  global.inMemoryMessages = list;
+
+  const { baseDir, messagesFile } = getStoragePaths();
+  try {
+    if (!fs.existsSync(baseDir)) {
+      fs.mkdirSync(baseDir, { recursive: true });
+    }
+    fs.writeFileSync(messagesFile, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (err: any) {
+    console.warn('Could not write messages to disk:', err.message);
+  }
+
   return newMsg;
 }
